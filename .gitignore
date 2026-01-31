@@ -137,3 +137,88 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# ===========================================
+# Python Backend
+# ===========================================
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ===========================================
+# OSM Graph Cache (large files)
+# ===========================================
+backend/data/cache/*.graphml
+backend/data/cache/*.json
+backend/data/cache/osmnx_cache/
+
+# ===========================================
+# IDE / Editor
+# ===========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ===========================================
+# Hackathon Sensitive Files
+# ===========================================
+# CRITICAL: Never commit these!
+credentials.json
+*.pem
+*.key
+ibm-credentials.env

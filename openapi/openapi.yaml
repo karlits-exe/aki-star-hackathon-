@@ -1,0 +1,366 @@
+openapi: 3.0.3
+info:
+  title: Generative Walking Route Planner API
+  description: |
+    A vibe-based walking route planner API for the IBM Dev Day "AI Demystified" Hackathon.
+    
+    This API generates walking routes optimized for user-defined "vibes" like greenery,
+    safety, quietness, and walkability. It uses OpenStreetMap data with a custom
+    Generative Cost Function: Cg = C_base × (1 - Quality_Score)
+    
+    ## Data Source
+    OpenStreetMap (OSM) under ODbL license.
+    
+    ## Supported Vibes
+    - **Greenery**: Parks, gardens, trees
+    - **Blue Space**: Rivers, lakes, coastline
+    - **Introvert Mode**: Quiet, peaceful areas
+    - **Extrovert Mode**: Lively, bustling areas
+    - **Safety Check**: Well-lit, safe streets
+    - **Walkability**: Pedestrian-friendly paths
+    
+    ## Integration with watsonx Orchestrate
+    Import this OpenAPI spec as a Custom Skill to enable natural language routing.
+  version: 1.0.0
+  contact:
+    name: IBM Hackathon Team
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: https://your-ngrok-url.ngrok.io
+    description: ngrok tunnel (replace with your URL)
+
+paths:
+  /route:
+    post:
+      operationId: generateWalkingRoute
+      summary: Generate a walking route based on vibes
+      description: |
+        Generate a walking route optimized for the user's vibe preferences.
+        
+        **For watsonx Orchestrate Agent:**
+        Map user intents to vibe parameters:
+        - "nature walk" → greenery=0.9, blue_space=0.3
+        - "safe evening walk" → safety_check=0.95
+        - "peaceful stroll" → introvert_mode=0.8
+        - "lively city walk" → extrovert_mode=0.9
+        - "quick walk to X" → walkability=0.9
+      tags:
+        - Routing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RouteRequest'
+            examples:
+              natureLoop:
+                summary: Nature Loop Walk
+                value:
+                  mode: circular_loop
+                  origin:
+                    lat: 14.5547
+                    lon: 121.0244
+                  duration_minutes: 45
+                  vibes:
+                    greenery: 0.9
+                    safety_check: 0.8
+                    introvert_mode: 0.6
+                    walkability: 0.8
+              safePointToPoint:
+                summary: Safe Evening Route
+                value:
+                  mode: point_to_point
+                  origin:
+                    lat: 14.5547
+                    lon: 121.0244
+                  destination:
+                    lat: 14.5580
+                    lon: 121.0280
+                  vibes:
+                    safety_check: 0.95
+                    walkability: 0.9
+      responses:
+        '200':
+          description: Successfully generated route
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error during route generation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Check API health status
+      tags:
+        - System
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /cached-regions:
+    get:
+      operationId: listCachedRegions
+      summary: List cached geographic regions
+      tags:
+        - System
+      responses:
+        '200':
+          description: List of cached regions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  regions:
+                    type: array
+                    items:
+                      type: string
+
+components:
+  schemas:
+    RouteRequest:
+      type: object
+      required:
+        - origin
+      properties:
+        mode:
+          type: string
+          enum: [point_to_point, circular_loop]
+          default: point_to_point
+          description: |
+            Routing mode:
+            - point_to_point: Route from origin to destination
+            - circular_loop: Round-trip from origin back to origin
+        origin:
+          $ref: '#/components/schemas/Coordinate'
+        destination:
+          $ref: '#/components/schemas/Coordinate'
+          description: Required for point_to_point mode
+        duration_minutes:
+          type: integer
+          minimum: 5
+          maximum: 180
+          default: 30
+          description: Target walk duration for circular_loop mode
+        vibes:
+          $ref: '#/components/schemas/VibeWeights'
+        no_go_zones:
+          type: array
+          items:
+            $ref: '#/components/schemas/NoGoZone'
+          description: Polygon areas to avoid
+        include_narrative:
+          type: boolean
+          default: true
+          description: Generate AI explanation of route choice
+
+    Coordinate:
+      type: object
+      required:
+        - lat
+        - lon
+      properties:
+        lat:
+          type: number
+          format: float
+          minimum: -90
+          maximum: 90
+          description: Latitude in decimal degrees
+        lon:
+          type: number
+          format: float
+          minimum: -180
+          maximum: 180
+          description: Longitude in decimal degrees
+      example:
+        lat: 14.5547
+        lon: 121.0244
+
+    VibeWeights:
+      type: object
+      description: |
+        Vibe preferences as floats from 0.0 to 1.0.
+        Higher values indicate stronger preference for that vibe.
+      properties:
+        greenery:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 0.5
+          description: Preference for parks, trees, green spaces (0=don't care, 1=maximum)
+        blue_space:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 0
+          description: Preference for water bodies like rivers, lakes
+        introvert_mode:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 0
+          description: Preference for quiet, peaceful areas (avoids busy streets)
+        extrovert_mode:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 0
+          description: Preference for lively, bustling areas with shops/cafes
+        safety_check:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 0.5
+          description: Preference for well-lit, safe streets
+        walkability:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 0.7
+          description: Preference for pedestrian-friendly paths
+
+    NoGoZone:
+      type: object
+      required:
+        - vertices
+      properties:
+        vertices:
+          type: array
+          minItems: 3
+          items:
+            $ref: '#/components/schemas/Coordinate'
+          description: Polygon vertices defining area to avoid
+
+    RouteResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          default: true
+        geojson:
+          $ref: '#/components/schemas/GeoJSONFeatureCollection'
+        metadata:
+          $ref: '#/components/schemas/RouteMetadata'
+
+    GeoJSONFeatureCollection:
+      type: object
+      properties:
+        type:
+          type: string
+          default: FeatureCollection
+        features:
+          type: array
+          items:
+            $ref: '#/components/schemas/GeoJSONFeature'
+
+    GeoJSONFeature:
+      type: object
+      properties:
+        type:
+          type: string
+          default: Feature
+        geometry:
+          $ref: '#/components/schemas/GeoJSONGeometry'
+        properties:
+          type: object
+          additionalProperties: true
+
+    GeoJSONGeometry:
+      type: object
+      properties:
+        type:
+          type: string
+          default: LineString
+        coordinates:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+          description: Array of [longitude, latitude] pairs
+
+    RouteMetadata:
+      type: object
+      properties:
+        distance_meters:
+          type: number
+          description: Total route distance in meters
+        estimated_duration_minutes:
+          type: number
+          description: Estimated walking time in minutes
+        vibe_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Overall route quality score based on vibes
+        vibe_breakdown:
+          type: object
+          additionalProperties:
+            type: number
+          description: Individual vibe scores for transparency
+        transparency_narrative:
+          type: string
+          nullable: true
+          description: AI-generated explanation of route choice
+        algorithm_used:
+          type: string
+          description: Routing algorithm used (dijkstra or astar)
+        nodes_explored:
+          type: integer
+          description: Number of graph nodes explored
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          default: healthy
+        version:
+          type: string
+        graph_loaded:
+          type: boolean
+          description: Whether OSM graph is loaded
+        cached_regions:
+          type: array
+          items:
+            type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          default: false
+        error:
+          type: string
+          description: Error message
+        error_code:
+          type: string
+          description: Machine-readable error code
+        details:
+          type: object
+          nullable: true
+          additionalProperties: true

@@ -1,0 +1,161 @@
+{
+  "$schema": "https://raw.githubusercontent.com/watson-developer-cloud/api-guidelines/master/schemas/ibm-skill-schema.json",
+  "name": "Walking Route Generator",
+  "description": "Generate walking routes based on vibes like greenery, safety, and quietness. Uses OpenStreetMap data to find the best paths.",
+  "skillType": "imported",
+  "version": "1.0.0",
+  "author": "IBM Hackathon Team",
+  "endpoints": {
+    "actions": {
+      "generateWalkingRoute": {
+        "title": "Generate Walking Route",
+        "description": "Create a walking route optimized for user preferences (vibes). Supports point-to-point routes and circular loops.",
+        "operationId": "generateWalkingRoute",
+        "requestMapping": {
+          "properties": {
+            "mode": {
+              "title": "Route Mode",
+              "description": "Type of route: 'point_to_point' for A to B, 'circular_loop' for round trips",
+              "type": "string",
+              "enum": ["point_to_point", "circular_loop"],
+              "x-]ibm-nl-intent-examples": [
+                "I want to walk from A to B",
+                "Plan a route to the park",
+                "I need a round trip walk",
+                "Give me a loop walk",
+                "Circular walking route"
+              ]
+            },
+            "origin": {
+              "title": "Starting Point",
+              "description": "Where the walk starts (latitude and longitude)",
+              "type": "object",
+              "x-ibm-nl-intent-examples": [
+                "starting from my location",
+                "from Makati",
+                "beginning at BGC"
+              ]
+            },
+            "destination": {
+              "title": "End Point",
+              "description": "Where the walk ends (for point-to-point routes)",
+              "type": "object",
+              "x-ibm-nl-intent-examples": [
+                "to Ayala Triangle",
+                "ending at the mall",
+                "going to the park"
+              ]
+            },
+            "duration_minutes": {
+              "title": "Walk Duration",
+              "description": "How long the walk should take in minutes",
+              "type": "integer",
+              "x-ibm-nl-intent-examples": [
+                "30 minute walk",
+                "about an hour",
+                "quick 15 minute stroll",
+                "45 minutes"
+              ]
+            },
+            "vibes": {
+              "title": "Vibe Preferences",
+              "description": "What kind of walking experience the user wants",
+              "type": "object",
+              "x-ibm-nl-intent-examples": [
+                "nature walk",
+                "safe route",
+                "quiet peaceful walk",
+                "through parks",
+                "avoid busy streets",
+                "well-lit path",
+                "scenic route"
+              ]
+            }
+          }
+        },
+        "parameterMapping": {
+          "greenery": {
+            "x-ibm-nl-slot-examples": [
+              {"utterance": "nature walk", "value": 0.9},
+              {"utterance": "through parks", "value": 0.85},
+              {"utterance": "green route", "value": 0.9},
+              {"utterance": "trees and gardens", "value": 0.8},
+              {"utterance": "scenic nature", "value": 0.85}
+            ]
+          },
+          "safety_check": {
+            "x-ibm-nl-slot-examples": [
+              {"utterance": "safe route", "value": 0.95},
+              {"utterance": "well-lit streets", "value": 0.9},
+              {"utterance": "evening walk", "value": 0.85},
+              {"utterance": "secure path", "value": 0.9}
+            ]
+          },
+          "introvert_mode": {
+            "x-ibm-nl-slot-examples": [
+              {"utterance": "quiet walk", "value": 0.85},
+              {"utterance": "peaceful stroll", "value": 0.8},
+              {"utterance": "avoid crowds", "value": 0.9},
+              {"utterance": "serene route", "value": 0.85}
+            ]
+          },
+          "extrovert_mode": {
+            "x-ibm-nl-slot-examples": [
+              {"utterance": "lively area", "value": 0.85},
+              {"utterance": "bustling streets", "value": 0.8},
+              {"utterance": "near shops and cafes", "value": 0.75},
+              {"utterance": "vibrant neighborhood", "value": 0.8}
+            ]
+          },
+          "walkability": {
+            "x-ibm-nl-slot-examples": [
+              {"utterance": "easy walking", "value": 0.9},
+              {"utterance": "pedestrian paths", "value": 0.95},
+              {"utterance": "sidewalks only", "value": 0.9}
+            ]
+          }
+        },
+        "responseMapping": {
+          "successMessage": "I've generated your walking route! It's {{metadata.distance_meters}} meters long and will take about {{metadata.estimated_duration_minutes}} minutes. {{metadata.transparency_narrative}}",
+          "outputProperties": {
+            "geojson": {
+              "title": "Route GeoJSON",
+              "description": "The route geometry for map display"
+            },
+            "metadata": {
+              "title": "Route Details",
+              "description": "Distance, duration, and vibe scores"
+            }
+          }
+        }
+      }
+    }
+  },
+  "conversationalSkillConfig": {
+    "freeformInput": true,
+    "slots": {
+      "origin_lat": {
+        "required": true,
+        "prompt": "Where would you like to start your walk? Please share a location or address."
+      },
+      "origin_lon": {
+        "required": true
+      },
+      "duration_minutes": {
+        "required": false,
+        "prompt": "How long would you like to walk for? (e.g., 30 minutes, 1 hour)",
+        "defaultValue": 30
+      },
+      "mode": {
+        "required": false,
+        "prompt": "Would you like a round-trip loop or a one-way route?",
+        "defaultValue": "circular_loop"
+      }
+    },
+    "clarificationPrompts": {
+      "missingLocation": "I'd be happy to plan a walking route! Could you tell me where you'd like to start?",
+      "missingDuration": "How long would you like your walk to be?",
+      "ambiguousVibes": "I want to find the perfect route for you. What's most important: being surrounded by nature, staying on safe well-lit streets, or finding a quiet peaceful path?"
+    }
+  }
+}
