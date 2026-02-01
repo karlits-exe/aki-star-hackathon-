@@ -6,12 +6,14 @@ Provides endpoints for point-to-point and circular loop routing.
 
 Data Source: OpenStreetMap (OSM) under ODbL license.
 """
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
 import httpx
+import time
+import json
 from typing import Optional
 
 from config import get_settings
@@ -28,11 +30,18 @@ from models.response_models import (
     GeoJSONFeature,
     GeoJSONGeometry,
 )
+from models.execute_models import (
+    ExecuteRequest,
+    ExecuteResponse,
+    ExecuteErrorResponse,
+    Coordinate
+)
 from services.graph_loader import GraphLoader
 from services.cost_functions import CostFunctionEngine
 from services.vibe_engine import VibeEngine
 from services.routing import RoutingService
 from services.loop_generator import LoopGenerator
+from services.execution_service import ExecutionService
 
 # Configure logging
 logging.basicConfig(
@@ -48,12 +57,46 @@ cost_engine: Optional[CostFunctionEngine] = None
 vibe_engine: Optional[VibeEngine] = None
 routing_service: Optional[RoutingService] = None
 loop_generator: Optional[LoopGenerator] = None
+execution_service: Optional[ExecutionService] = None
 
+# Simple session storage for location context
+location_sessions: dict[str, dict] = {}
+route_results: dict[str, dict] = {}  # Store route results by session_id
+
+# WebSocket connection manager
+class ConnectionManager:
+    """Manages WebSocket connections for real-time route updates."""
+    def __init__(self):
+        self.active_connections: dict[str, WebSocket] = {}
+    
+    async def connect(self, websocket: WebSocket, session_id: str):
+        await websocket.accept()
+        self.active_connections[session_id] = websocket
+        logger.info(f"WebSocket connected for session {session_id}")
+    
+    def disconnect(self, session_id: str):
+        if session_id in self.active_connections:
+            del self.active_connections[session_id]
+            logger.info(f"WebSocket disconnected for session {session_id}")
+    
+    async def send_route(self, session_id: str, route_data: dict):
+        """Send route data to specific session."""
+        if session_id in self.active_connections:
+            try:
+                await self.active_connections[session_id].send_json({
+                    "type": "route_ready",
+                    "data": route_data
+                })
+                logger.info(f"Route sent via WebSocket to session {session_id}")
+            except Exception as e:
+                logger.error(f"Failed to send route via WebSocket: {e}")
+
+manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
-    global graph_loader, cost_engine, vibe_engine, routing_service, loop_generator
+    global graph_loader, cost_engine, vibe_engine, routing_service, loop_generator, execution_service
     
     logger.info("Starting Generative Walking Route Planner...")
     logger.info(f"Default location: {settings.default_place}")
@@ -72,6 +115,7 @@ async def lifespan(app: FastAPI):
         vibe_engine = VibeEngine(graph_loader.amenities)
         routing_service = RoutingService(graph, cost_engine, vibe_engine)
         loop_generator = LoopGenerator(graph, routing_service, cost_engine, vibe_engine)
+        execution_service = ExecutionService(graph_loader, graph)
         
         logger.info("All services initialized successfully!")
     except Exception as e:
@@ -82,12 +126,11 @@ async def lifespan(app: FastAPI):
     
     logger.info("Shutting down...")
 
-
 # Create FastAPI app
 app = FastAPI(
     title="Generative Walking Route Planner API",
     description="""
-    A vibe-based walking route planner that generates routes based on user preferences.
+    A vibe-based walking route planner API for the IBM Dev Day "AI Demystified" Hackathon.
     
     ## Features
     - **Point-to-Point Routing**: Find the best walking route between two points
@@ -118,6 +161,23 @@ app.add_middleware(
 )
 
 
+# WebSocket endpoint for real-time route updates
+@app.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    """
+    WebSocket endpoint for receiving route updates in real-time.
+    Frontend connects here to get instant route when ready.
+    """
+    await manager.connect(websocket, session_id)
+    try:
+        while True:
+            # Keep connection alive, wait for messages (optional)
+            data = await websocket.receive_text()
+            # Can handle ping/pong or other messages here
+    except WebSocketDisconnect:
+        manager.disconnect(session_id)
+
+
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check():
     """Check API health and graph status."""
@@ -129,281 +189,172 @@ async def health_check():
     )
 
 
-@app.post(
-    "/route",
-    response_model=RouteResponse,
-    tags=["Routing"],
-    summary="Generate a walking route",
-    description="""
-    Generate a walking route based on vibes and preferences.
-    
-    Supports two modes:
-    - **point_to_point**: Route from origin to destination
-    - **circular_loop**: Round-trip from origin back to origin
-    
-    ## Vibe Parameters
-    All vibes are floats from 0.0 to 1.0:
-    - **greenery**: Prefer parks and green spaces
-    - **blue_space**: Prefer water features (rivers, lakes)
-    - **introvert_mode**: Prefer quiet, peaceful areas
-    - **extrovert_mode**: Prefer lively, bustling areas
-    - **safety_check**: Prefer well-lit, safe streets
-    - **walkability**: Prefer pedestrian-friendly paths
-    """
-)
-async def generate_route(request: RouteRequest) -> RouteResponse:
-    """Generate a walking route."""
-    global graph_loader, cost_engine, vibe_engine, routing_service, loop_generator
-    
-    # Validate request
-    if request.mode == RouteMode.POINT_TO_POINT and request.destination is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Destination is required for point_to_point mode"
-        )
-    
-    try:
-        # Ensure graph is loaded for the region
-        if graph_loader is None or graph_loader.graph is None:
-            graph_loader = GraphLoader(settings.cache_dir)
-            # Load graph around origin point
-            graph = graph_loader.load_graph_by_point(
-                request.origin.lat,
-                request.origin.lon,
-                dist_meters=3000
-            )
-            cost_engine = CostFunctionEngine(graph_loader.amenities)
-            vibe_engine = VibeEngine(graph_loader.amenities)
-            routing_service = RoutingService(graph, cost_engine, vibe_engine)
-            loop_generator = LoopGenerator(graph, routing_service, cost_engine, vibe_engine)
-        
-        # Get nearest nodes
-        origin_node = graph_loader.get_nearest_node(
-            request.origin.lat,
-            request.origin.lon
-        )
-        
-        # Convert vibe weights to dict
-        vibe_weights = request.vibes.model_dump()
-        
-        # Add no-go zones to vibe engine
-        for zone in request.no_go_zones:
-            # Calculate zone centroid
-            center_lat = sum(v.lat for v in zone.vertices) / len(zone.vertices)
-            center_lon = sum(v.lon for v in zone.vertices) / len(zone.vertices)
-            vibe_engine.add_no_go_zone(center_lat, center_lon, radius_meters=150)
-        
-        if request.mode == RouteMode.CIRCULAR_LOOP:
-            # Generate circular loop
-            result = loop_generator.generate_loop_bidirectional(
-                origin_node,
-                request.duration_minutes,
-                vibe_weights
-            )
-            
-            # Build GeoJSON
-            coords = [[lon, lat] for lat, lon in result.full_path_coords]
-            
-            geojson = GeoJSONFeatureCollection(
-                features=[
-                    GeoJSONFeature(
-                        geometry=GeoJSONGeometry(coordinates=coords),
-                        properties={
-                            "stroke": "#22c55e",
-                            "stroke-width": 4,
-                            "stroke-opacity": 0.8,
-                            "route_type": "circular_loop",
-                            "disjoint_percentage": result.disjoint_percentage
-                        }
-                    )
-                ]
-            )
-            
-            # Generate narrative if requested
-            narrative = None
-            if request.include_narrative:
-                narrative = vibe_engine.generate_transparency_summary(
-                    result.vibe_profile,
-                    vibe_weights
-                )
-                # Optionally enhance with watsonx
-                if settings.watsonx_api_key:
-                    narrative = await _generate_ai_narrative(
-                        result.vibe_profile,
-                        vibe_weights,
-                        result.total_distance,
-                        result.total_time
-                    )
-            
-            return RouteResponse(
-                success=True,
-                geojson=geojson,
-                metadata=RouteMetadata(
-                    distance_meters=result.total_distance,
-                    estimated_duration_minutes=result.total_time / 60,
-                    vibe_score=result.vibe_profile.overall,
-                    vibe_breakdown=result.vibe_profile.to_dict(),
-                    transparency_narrative=narrative,
-                    algorithm_used="bidirectional_astar",
-                    nodes_explored=result.nodes_explored
-                )
-            )
-        
-        else:
-            # Point-to-point routing
-            dest_node = graph_loader.get_nearest_node(
-                request.destination.lat,
-                request.destination.lon
-            )
-            
-            result = routing_service.find_route(
-                origin_node,
-                dest_node,
-                vibe_weights,
-                algorithm="astar"
-            )
-            
-            # Build GeoJSON
-            coords = [[lon, lat] for lat, lon in result.path_coords]
-            
-            geojson = GeoJSONFeatureCollection(
-                features=[
-                    GeoJSONFeature(
-                        geometry=GeoJSONGeometry(coordinates=coords),
-                        properties={
-                            "stroke": "#3b82f6",
-                            "stroke-width": 4,
-                            "stroke-opacity": 0.8,
-                            "route_type": "point_to_point"
-                        }
-                    )
-                ]
-            )
-            
-            # Generate narrative
-            narrative = None
-            if request.include_narrative:
-                narrative = vibe_engine.generate_transparency_summary(
-                    result.vibe_profile,
-                    vibe_weights
-                )
-                if settings.watsonx_api_key:
-                    narrative = await _generate_ai_narrative(
-                        result.vibe_profile,
-                        vibe_weights,
-                        result.total_distance,
-                        result.total_time
-                    )
-            
-            return RouteResponse(
-                success=True,
-                geojson=geojson,
-                metadata=RouteMetadata(
-                    distance_meters=result.total_distance,
-                    estimated_duration_minutes=result.total_time / 60,
-                    vibe_score=result.vibe_profile.overall,
-                    vibe_breakdown=result.vibe_profile.to_dict(),
-                    transparency_narrative=narrative,
-                    algorithm_used=result.algorithm,
-                    nodes_explored=result.nodes_explored
-                )
-            )
-    
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-    except Exception as e:
-        logger.exception("Error generating route")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Route generation failed: {str(e)}"
-        )
-
-
-async def _generate_ai_narrative(
-    vibe_profile,
-    vibe_weights: dict,
-    distance: float,
-    time: float
-) -> str:
-    """
-    Generate AI narrative using IBM watsonx Granite model.
-    
-    This enhances the transparency narrative with AI-generated explanations.
-    """
-    if not settings.watsonx_api_key:
-        return None
-    
-    try:
-        # Build prompt
-        prompt = f"""You are a helpful walking route assistant. Explain why this route was chosen in 2-3 sentences.
-
-Route details:
-- Distance: {distance:.0f} meters ({distance/1000:.1f} km)
-- Estimated time: {time/60:.0f} minutes
-- Vibe scores achieved:
-  - Greenery: {vibe_profile.greenery:.0%}
-  - Safety: {vibe_profile.safety:.0%}
-  - Quietness: {vibe_profile.quietness:.0%}
-  - Walkability: {vibe_profile.walkability:.0%}
-
-User preferences:
-- Greenery importance: {vibe_weights.get('greenery', 0):.0%}
-- Safety importance: {vibe_weights.get('safety_check', 0):.0%}
-- Quiet areas importance: {vibe_weights.get('introvert_mode', 0):.0%}
-- Walkability importance: {vibe_weights.get('walkability', 0):.0%}
-
-Explain the route choice briefly and naturally:"""
-
-        # Call watsonx API
-        async with httpx.AsyncClient() as client:
-            # Get IAM token
-            token_response = await client.post(
-                "https://iam.cloud.ibm.com/identity/token",
-                data={
-                    "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
-                    "apikey": settings.watsonx_api_key
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
-            )
-            token = token_response.json().get("access_token")
-            
-            # Call model
-            response = await client.post(
-                f"{settings.watsonx_url}/ml/v1/text/generation?version=2024-01-01",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model_id": settings.watsonx_model_id,
-                    "project_id": settings.watsonx_project_id,
-                    "input": prompt,
-                    "parameters": {
-                        "max_new_tokens": 150,
-                        "temperature": 0.7,
-                        "top_p": 0.9
-                    }
-                },
-                timeout=30.0
-            )
-            
-            result = response.json()
-            return result.get("results", [{}])[0].get("generated_text", "").strip()
-    
-    except Exception as e:
-        logger.warning(f"AI narrative generation failed: {e}")
-        return None
-
-
 @app.get("/cached-regions", tags=["System"])
 async def list_cached_regions():
     """List all cached graph regions."""
     if graph_loader is None:
         return {"regions": []}
     return {"regions": graph_loader.list_cached_regions()}
+
+
+@app.post("/set-location", tags=["Session Management"])
+async def set_location(request: dict):
+    """
+    Store location in session for later use by /execute.
+    Called by frontend when user clicks on map.
+    
+    Expected JSON body:
+    {
+        "session_id": "session_abc123",
+        "lat": 14.5547,
+        "lon": 121.0244
+    }
+    """
+    global location_sessions
+    
+    session_id = request.get("session_id")
+    lat = request.get("lat")
+    lon = request.get("lon")
+    
+    if not session_id or lat is None or lon is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: session_id, lat, lon"
+        )
+    
+    location_sessions[session_id] = {
+        "lat": lat,
+        "lon": lon,
+        "timestamp": time.time()
+    }
+    logger.info(f"Location stored for session {session_id}: {lat}, {lon}")
+    return {"success": True, "message": "Location stored"}
+
+
+@app.post(
+    "/execute",
+    response_model=ExecuteResponse,
+    responses={400: {"model": ExecuteErrorResponse}},
+    tags=["Orchestrate Integration"],
+    summary="Execute route generation (Orchestrate entry point)",
+    description="""
+    Pure execution endpoint for watsonx Orchestrate.
+    
+    This endpoint receives clean execution parameters from Orchestrate
+    and performs the routing algorithm without any strategic decisions.
+    
+    All strategic analysis (vibe mapping, algorithm selection, etc.)
+    is done by Orchestrate before calling this endpoint.
+    
+    Always generates circular loop walks.
+    """
+)
+async def execute_route(request: ExecuteRequest) -> ExecuteResponse:
+    """
+    Execute route generation with clean parameters from Orchestrate.
+    """
+    global graph_loader, execution_service, location_sessions, route_results
+    
+    try:
+        # Handle location from session if origin not provided
+        origin = request.origin
+        if origin is None and request.session_id:
+            session_data = location_sessions.get(request.session_id)
+            if session_data:
+                origin = Coordinate(lat=session_data["lat"], lon=session_data["lon"])
+                logger.info(f"Retrieved location from session {request.session_id}: {origin.lat}, {origin.lon}")
+            else:
+                raise ValueError(f"Session {request.session_id} not found. Please select a location on the map first.")
+        
+        if origin is None:
+            raise ValueError("Either origin coordinates or session_id must be provided")
+        
+        # Ensure graph is loaded and covers the user's location with walking network
+        graph = None
+        if graph_loader is None or graph_loader.graph is None:
+            logger.info(f"Initializing graph loader for location ({origin.lat}, {origin.lon})")
+            graph_loader = GraphLoader(settings.cache_dir)
+            graph = graph_loader.load_graph_by_point(
+                origin.lat,
+                origin.lon,
+                dist_meters=5000  # Increased from 3000 to capture more walking network
+            )
+        elif not graph_loader.is_point_in_graph_bounds(origin.lat, origin.lon, buffer_meters=1000):
+            # User's location is outside the current graph bounds - reload graph centered on user
+            logger.info(f"User location ({origin.lat}, {origin.lon}) outside current graph bounds. Reloading graph...")
+            graph = graph_loader.load_graph_by_point(
+                origin.lat,
+                origin.lon,
+                dist_meters=5000  # Increased from 3000
+            )
+        else:
+            graph = graph_loader.graph
+            logger.info(f"Using existing graph for location ({origin.lat}, {origin.lon})")
+        
+        # Ensure execution_service is initialized with the correct graph
+        if execution_service is None or execution_service.graph is None or execution_service.graph != graph:
+            if graph is None:
+                logger.info(f"Graph is None, loading for location ({origin.lat}, {origin.lon})")
+                graph_loader = GraphLoader(settings.cache_dir)
+                graph = graph_loader.load_graph_by_point(
+                    origin.lat,
+                    origin.lon,
+                    dist_meters=3000
+                )
+            logger.info(f"Creating new ExecutionService with graph at location ({origin.lat}, {origin.lon})")
+            execution_service = ExecutionService(graph_loader, graph)
+        
+        # Create request with resolved origin
+        execute_request = ExecuteRequest(
+            origin=origin,
+            duration_minutes=request.duration_minutes,
+            vibes=request.vibes,
+            no_go_zones=request.no_go_zones
+        )
+        
+        # Execute the route
+        result = execution_service.execute(execute_request)
+        
+        # Store route by session_id if provided (for frontend retrieval)
+        if request.session_id:
+            route_results[request.session_id] = result.model_dump()
+            logger.info(f"Route stored for session {request.session_id}")
+            
+            # Send via WebSocket for real-time update
+            await manager.send_route(request.session_id, result.model_dump())
+        
+        return result
+        
+    except ValueError as e:
+        logger.error(f"Route execution failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.exception("Unexpected error during route execution")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Route generation failed: {str(e)}"
+        )
+
+
+@app.get("/get-route/{session_id}", tags=["Session Management"])
+async def get_route(session_id: str):
+    """
+    Retrieve a generated route by session ID.
+    Called by frontend after user chats with Orchestrate.
+    """
+    global route_results
+    
+    route_data = route_results.get(session_id)
+    if route_data:
+        return route_data
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail="No route found for this session. Please chat with the AI first to generate a route."
+        )
 
 
 # Error handlers

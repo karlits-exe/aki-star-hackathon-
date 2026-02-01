@@ -174,22 +174,45 @@ class RoutingService:
         nodes_explored: int,
         algorithm: str
     ) -> RoutingResult:
-        """Build a RoutingResult from a path."""
-        # Convert node IDs to coordinates
+        """Build a RoutingResult from a path with full road geometry."""
+        # Build coordinate list with full edge geometries
         coords = []
-        for node in path_nodes:
-            node_data = self.graph.nodes[node]
-            coords.append((node_data['y'], node_data['x']))  # lat, lon
-        
-        # Calculate total distance
-        total_distance = 0.0
         edge_data_list = []
+        total_distance = 0.0
         
-        for i in range(len(path_nodes) - 1):
-            u, v = path_nodes[i], path_nodes[i+1]
-            edge_data = self.graph[u][v][0]
-            edge_data_list.append(edge_data)
-            total_distance += edge_data.get('length', 0)
+        for i in range(len(path_nodes)):
+            u = path_nodes[i]
+            
+            # Add node coordinate
+            node_data = self.graph.nodes[u]
+            node_coord = (node_data['y'], node_data['x'])  # lat, lon
+            
+            if i == 0:
+                # First node - just add it
+                coords.append(node_coord)
+            else:
+                # Get edge from previous node to this node
+                prev = path_nodes[i-1]
+                edge_data = self.graph[prev][u][0]
+                edge_data_list.append(edge_data)
+                total_distance += edge_data.get('length', 0)
+                
+                # Check if edge has geometry (LineString with intermediate points)
+                if 'geometry' in edge_data:
+                    # Extract all points from the geometry LineString
+                    geom = edge_data['geometry']
+                    # shapely LineString coords are (lon, lat), need to convert to (lat, lon)
+                    edge_coords = [(lat, lon) for lon, lat in geom.coords]
+                    
+                    # Add edge coordinates (skip first if it matches last coord to avoid duplicates)
+                    if edge_coords:
+                        if coords and edge_coords[0] == coords[-1]:
+                            coords.extend(edge_coords[1:])
+                        else:
+                            coords.extend(edge_coords)
+                else:
+                    # No geometry - just add the node coordinate
+                    coords.append(node_coord)
         
         # Estimate time (4.5 km/h = 1.25 m/s)
         total_time = total_distance / 1.25

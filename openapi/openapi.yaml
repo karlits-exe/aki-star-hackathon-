@@ -25,10 +25,8 @@ info:
   contact:
     name: IBM Hackathon Team
 servers:
-  - url: http://localhost:8000
-    description: Local development server
-  - url: https://your-ngrok-url.ngrok.io
-    description: ngrok tunnel (replace with your URL)
+  - url: https://638be3913b41.ngrok-free.app
+    description: Production server via ngrok
 
 paths:
   /route:
@@ -114,6 +112,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
 
+  /set-location:
+    post:
+      operationId: setLocation
+      summary: Store location in session for later retrieval
+      description: |
+        Called by frontend when user clicks on map.
+        Stores location coordinates with a session ID.
+        The session_id can later be used with /execute to retrieve the location.
+      tags:
+        - Session Management
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - session_id
+                - lat
+                - lon
+              properties:
+                session_id:
+                  type: string
+                  description: Unique session identifier
+                lat:
+                  type: number
+                  description: Latitude
+                lon:
+                  type: number
+                  description: Longitude
+      responses:
+        '200':
+          description: Location stored successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+
   /cached-regions:
     get:
       operationId: listCachedRegions
@@ -132,6 +173,66 @@ paths:
                     type: array
                     items:
                       type: string
+
+  /execute:
+    post:
+      operationId: executeRoute
+      summary: Execute route generation for Orchestrate
+      description: |
+        Pure execution endpoint for watsonx Orchestrate.
+        
+        This endpoint receives clean execution parameters from Orchestrate
+        and performs the routing algorithm without any strategic decisions.
+        
+        All strategic analysis (vibe mapping, algorithm selection, etc.)
+        is done by Orchestrate before calling this endpoint.
+        
+        Always generates circular loop walks using Dijkstra's algorithm.
+      tags:
+        - Orchestrate Integration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteRequest'
+            examples:
+              highGreenery:
+                summary: High greenery request
+                value:
+                  origin:
+                    lat: 14.5547
+                    lon: 121.0244
+                  duration_minutes: 45
+                  vibes:
+                    greenery: 0.9
+                    introvert_mode: 0.7
+                    safety_check: 0.6
+                    walkability: 0.8
+              safeEvening:
+                summary: Safe evening walk
+                value:
+                  origin:
+                    lat: 14.5547
+                    lon: 121.0244
+                  duration_minutes: 30
+                  vibes:
+                    safety_check: 0.95
+                    walkability: 0.9
+                    greenery: 0.4
+      responses:
+        '200':
+          description: Successfully generated route
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteResponse'
+        '400':
+          description: Route generation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteErrorResponse'
 
 components:
   schemas:
@@ -364,3 +465,103 @@ components:
           type: object
           nullable: true
           additionalProperties: true
+
+    ExecuteRequest:
+      type: object
+      properties:
+        origin:
+          $ref: '#/components/schemas/Coordinate'
+          description: Starting point coordinates. If not provided, session_id must be provided.
+        session_id:
+          type: string
+          description: Session ID to retrieve location from frontend. Use this when origin is not provided directly.
+        duration_minutes:
+          type: integer
+          minimum: 5
+          maximum: 180
+          default: 30
+          description: Target walk duration in minutes. Always generates circular loop.
+        vibes:
+          $ref: '#/components/schemas/VibeWeights'
+        no_go_zones:
+          type: array
+          items:
+            $ref: '#/components/schemas/NoGoZone'
+          description: Polygon areas to avoid during routing
+
+    ExecuteResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          default: true
+        geojson:
+          $ref: '#/components/schemas/GeoJSONFeatureCollection'
+        metadata:
+          type: object
+          properties:
+            distance_meters:
+              type: number
+              description: Total route distance in meters
+            estimated_duration_minutes:
+              type: number
+              description: Estimated walking time in minutes
+            vibe_score:
+              type: number
+              minimum: 0
+              maximum: 1
+              description: Overall route quality based on vibes
+            vibe_breakdown:
+              type: object
+              properties:
+                greenery:
+                  type: number
+                blue_space:
+                  type: number
+                quietness:
+                  type: number
+                liveliness:
+                  type: number
+                safety:
+                  type: number
+                walkability:
+                  type: number
+                overall:
+                  type: number
+        execution_details:
+          type: object
+          properties:
+            algorithm:
+              type: string
+              default: dijkstra
+              description: Pathfinding algorithm used
+            nodes_explored:
+              type: integer
+              description: Number of graph nodes explored
+            graph_size:
+              type: string
+              description: Size of OSM graph (nodes/edges)
+            disjoint_percentage:
+              type: number
+              description: Percentage of return path that is unique (0-1)
+            execution_time_ms:
+              type: number
+              description: Time taken to generate route in milliseconds
+
+    ExecuteErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          default: false
+        error:
+          type: string
+          description: Error message for Orchestrate to display
+        error_code:
+          type: string
+          description: Machine-readable error code
+        suggestions:
+          type: array
+          items:
+            type: string
+          description: Suggestions for the user to try different parameters

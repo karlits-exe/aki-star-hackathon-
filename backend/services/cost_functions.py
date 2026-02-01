@@ -148,7 +148,7 @@ class CostFunctionEngine:
         
         # Greenery score: Based on nearby parks
         parks_nearby = self._count_nearby_pois(mid_lat, mid_lon, self._park_coords, 150)
-        greenery = min(1.0, parks_nearby / 2) if parks_nearby > 0 else 0.3
+        greenery = min(1.0, parks_nearby / 2) if parks_nearby > 0 else 0.05  # Low default to penalize non-green areas
         
         # Blue space score: Based on nearby water
         water_nearby = self._count_nearby_pois(mid_lat, mid_lon, self._water_coords, 200)
@@ -244,30 +244,32 @@ class CostFunctionEngine:
         self,
         base_cost: float,
         quality_score: float,
-        smoothing: float = 0.1
+        smoothing: float = 0.6
     ) -> float:
         """
         Apply the Generative Cost Function.
         
         Formula: Cg = C_base * (1 - Quality_Score * smoothing_factor)
         
-        The smoothing factor prevents costs from going to zero.
+        The smoothing factor controls how much vibes influence routing.
+        Higher values = stronger preference for matching vibes (may result in longer routes)
         
         Args:
             base_cost: Original edge cost (distance or time)
             quality_score: Quality score in [0, 1]
-            smoothing: How much quality affects cost (0.1 = 10% max reduction)
+            smoothing: How much quality affects cost (0.6 = 60% max reduction/increase)
             
         Returns:
             Adjusted cost
         """
         # Cg = C_base * (1 - Quality_Score * smoothing)
-        # High quality (1.0) -> cost reduced by smoothing factor
-        # Low quality (0.0) -> cost unchanged
+        # High quality (1.0) -> cost reduced by up to 60% (making it much more attractive)
+        # Low quality (0.0) -> cost unchanged (no penalty)
+        # Very low quality (negative scores possible via repellents) -> cost increased up to 50%
         adjustment = 1.0 - (quality_score * smoothing)
         
-        # Clamp to prevent negative or zero costs
-        adjustment = max(0.3, min(1.5, adjustment))
+        # Clamp to prevent negative costs but allow 50% cost increase for bad edges
+        adjustment = max(0.4, min(1.5, adjustment))
         
         return base_cost * adjustment
     
@@ -305,6 +307,24 @@ class CostFunctionEngine:
             
             # Compute quality score
             quality = self.compute_quality_score(edge_scores, vibe_weights)
+            
+            # Highway penalty: Major roads get significant penalty for nature/quietness requests
+            highway = data.get('highway', 'unclassified')
+            if isinstance(highway, list):
+                highway = highway[0]
+            
+            # Check if user wants greenery or quietness
+            wants_nature = vibe_weights.get('greenery', 0) > 0.5 or vibe_weights.get('introvert_mode', 0) > 0.5
+            
+            if wants_nature:
+                # Major highways to avoid when seeking nature/quietness
+                major_roads = ['motorway', 'trunk', 'primary', 'secondary']
+                if highway in major_roads:
+                    # Strong penalty: reduces quality score, effectively increasing cost
+                    quality = quality * 0.2  # 80% penalty for highways
+                elif highway in ['tertiary', 'service']:
+                    # Moderate penalty for smaller roads
+                    quality = quality * 0.6  # 40% penalty
             
             # Apply generative cost function
             return self.compute_generative_cost(base_cost, quality)

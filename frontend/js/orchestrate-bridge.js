@@ -112,6 +112,46 @@ class OrchestrateBridge {
     }
     
     /**
+     * Send location context to Orchestrate chat
+     * This allows the agent to know the user's selected location without asking
+     */
+    sendLocationContext(lat, lon, locationName = 'Selected Location') {
+        // Store location for reference
+        this.userLocation = { lat, lon, name: locationName };
+        
+        // Create a context message
+        const contextMessage = {
+            type: 'location_context',
+            payload: {
+                lat: lat,
+                lon: lon,
+                name: locationName,
+                timestamp: new Date().toISOString()
+            }
+        };
+        
+        // Send via postMessage to the embedded chat iframe
+        const chatFrame = document.querySelector('iframe[src*="watson"], iframe[src*="ibm"], iframe[src*="assistant"]');
+        if (chatFrame && chatFrame.contentWindow) {
+            chatFrame.contentWindow.postMessage(contextMessage, '*');
+        }
+        
+        // Also dispatch custom event for the script.js to handle
+        window.dispatchEvent(new CustomEvent('locationSelected', { 
+            detail: { lat, lon, name: locationName }
+        }));
+        
+        console.log('Location context sent to Orchestrate:', contextMessage);
+    }
+
+    /**
+     * Get the stored user location
+     */
+    getUserLocation() {
+        return this.userLocation || null;
+    }
+
+    /**
      * Handle route data from the chat
      */
     handleRouteData(data) {

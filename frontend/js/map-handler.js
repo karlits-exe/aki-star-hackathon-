@@ -80,6 +80,11 @@ class MapHandler {
             .bindPopup('Start Point')
             .openPopup();
         
+        // Send location context to Orchestrate if bridge is available
+        if (window.app && window.app.orchestrateBridge) {
+            window.app.orchestrateBridge.sendLocationContext(lat, lon, 'User Selected Location');
+        }
+        
         console.log(`Start marker set: ${lat}, ${lon}`);
     }
     

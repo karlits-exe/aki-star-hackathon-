@@ -11,6 +11,7 @@ from typing import Optional
 import hashlib
 import json
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ class GraphLoader:
             self._graph = ox.graph_from_place(
                 place,
                 network_type=network_type,
-                simplify=True
+                simplify=False  # Keep full geometry for accurate route rendering
             )
             # Add edge speeds and travel times for walking
             self._graph = ox.add_edge_speeds(self._graph, fallback=4.5)  # 4.5 km/h walk
@@ -114,7 +115,7 @@ class GraphLoader:
                 (lat, lon),
                 dist=dist_meters,
                 network_type=network_type,
-                simplify=True
+                simplify=False  # Keep full geometry for accurate route rendering
             )
             self._graph = ox.add_edge_speeds(self._graph, fallback=4.5)
             self._graph = ox.add_edge_travel_times(self._graph)
@@ -297,6 +298,43 @@ class GraphLoader:
             raise ValueError("No graph loaded.")
         node_data = self._graph.nodes[node_id]
         return (node_data['y'], node_data['x'])  # lat, lon
+    
+    def is_point_in_graph_bounds(self, lat: float, lon: float, buffer_meters: float = 500) -> bool:
+        """
+        Check if a point is within the loaded graph's bounds with a buffer.
+        
+        Args:
+            lat, lon: Point coordinates
+            buffer_meters: How far outside the bounds is still considered "in" (default 500m)
+            
+        Returns:
+            True if point is within bounds + buffer
+        """
+        if self._graph is None:
+            return False
+        
+        try:
+            # Get graph bounds
+            nodes = self._graph.nodes(data=True)
+            lats = [data['y'] for _, data in nodes]
+            lons = [data['x'] for _, data in nodes]
+            
+            if not lats or not lons:
+                return False
+            
+            min_lat, max_lat = min(lats), max(lats)
+            min_lon, max_lon = min(lons), max(lons)
+            
+            # Convert buffer to degrees (approximate)
+            buffer_lat = buffer_meters / 111000  # ~111km per degree
+            buffer_lon = buffer_meters / (111000 * abs(math.cos(math.radians(lat))))
+            
+            # Check if point is within bounds + buffer
+            return (min_lat - buffer_lat <= lat <= max_lat + buffer_lat and
+                    min_lon - buffer_lon <= lon <= max_lon + buffer_lon)
+        except Exception as e:
+            logger.warning(f"Could not check graph bounds: {e}")
+            return False
     
     def list_cached_regions(self) -> list[str]:
         """List all cached graph files."""

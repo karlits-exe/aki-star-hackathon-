@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unnamed - Generative Walking Route Planner</title>
+    <title>歩く (Aruku) - AI Walking Route Planner</title>
     
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
@@ -19,7 +19,7 @@
         <header class="app-header">
             <div class="logo">
                 <span class="logo-icon">🚶</span>
-                <h1>Unnamed</h1>
+                <h1>歩く (Aruku)</h1>
                 <span class="tagline">Walk by Vibes, Not by Speed</span>
             </div>
             <div class="header-actions">
@@ -59,154 +59,61 @@
                         <!-- Filled by JS -->
                     </div>
                     <div class="route-narrative" id="route-narrative">
-                        <!-- AI explanation -->
+                        <!-- AI explanation from Orchestrate -->
                     </div>
                 </div>
                 
                 <!-- Loading overlay -->
                 <div id="loading-overlay" class="loading-overlay hidden">
                     <div class="loading-spinner"></div>
-                    <p>Generating your vibe-optimized route...</p>
+                    <p>Planning your walk with AI...</p>
+                </div>
+
+                <!-- Location hint -->
+                <div id="location-hint" class="location-hint">
+                    <p>👆 Click on the map to set your starting point</p>
                 </div>
             </div>
 
-            <!-- Sidebar with chat and controls -->
+            <!-- Sidebar with chat -->
             <aside class="sidebar">
-                <!-- Vibe Controls (Manual Mode) -->
-                <div class="panel vibe-panel">
-                    <h2>🎨 Set Your Vibes</h2>
-                    <p class="panel-description">Adjust sliders or chat with the AI assistant below</p>
+                <!-- Instructions Panel -->
+                <div class="panel instructions-panel">
+                    <h2>🗺️ How It Works</h2>
+                    <ol class="instruction-list">
+                        <li><strong>Click on the map</strong> to set your starting location</li>
+                        <li><strong>Real-time connection</strong> established automatically</li>
+                        <li><strong>Chat with the AI</strong> - provide Session ID + describe your walk</li>
+                        <li><strong>Route appears instantly</strong> on the map when ready!</li>
+                    </ol>
                     
-                    <div class="vibe-sliders">
-                        <div class="vibe-slider">
-                            <label>
-                                <span class="vibe-icon">🌳</span>
-                                Greenery
-                                <span class="vibe-value" id="greenery-value">50%</span>
-                            </label>
-                            <input type="range" id="greenery" min="0" max="100" value="50">
+                    <!-- Session ID Display -->
+                    <div class="session-id-box" id="session-id-box" style="display:none;">
+                        <h3>✅ Connected & Ready!</h3>
+                        <p class="session-label">Your Session ID (copy this):</p>
+                        <div class="session-id-container">
+                            <code id="session-id-display">session_...</code>
+                            <button id="copy-session-btn" class="btn btn-secondary btn-small">📋 Copy</button>
                         </div>
+                        <p class="session-hint">Paste this in chat: <strong>"My session is [ID], plan a 30-min nature walk"</strong></p>
                         
-                        <div class="vibe-slider">
-                            <label>
-                                <span class="vibe-icon">💧</span>
-                                Blue Space
-                                <span class="vibe-value" id="blue_space-value">0%</span>
-                            </label>
-                            <input type="range" id="blue_space" min="0" max="100" value="0">
-                        </div>
-                        
-                        <div class="vibe-slider">
-                            <label>
-                                <span class="vibe-icon">🤫</span>
-                                Quiet/Peaceful
-                                <span class="vibe-value" id="introvert_mode-value">0%</span>
-                            </label>
-                            <input type="range" id="introvert_mode" min="0" max="100" value="0">
-                        </div>
-                        
-                        <div class="vibe-slider">
-                            <label>
-                                <span class="vibe-icon">🎉</span>
-                                Lively/Bustling
-                                <span class="vibe-value" id="extrovert_mode-value">0%</span>
-                            </label>
-                            <input type="range" id="extrovert_mode" min="0" max="100" value="0">
-                        </div>
-                        
-                        <div class="vibe-slider">
-                            <label>
-                                <span class="vibe-icon">💡</span>
-                                Safety (Well-lit)
-                                <span class="vibe-value" id="safety_check-value">50%</span>
-                            </label>
-                            <input type="range" id="safety_check" min="0" max="100" value="50">
-                        </div>
-                        
-                        <div class="vibe-slider">
-                            <label>
-                                <span class="vibe-icon">🚶</span>
-                                Walkability
-                                <span class="vibe-value" id="walkability-value">70%</span>
-                            </label>
-                            <input type="range" id="walkability" min="0" max="100" value="70">
+                        <div class="route-check-section" style="margin-top: 15px; padding-top: 15px; border-top: 1px dashed #22c55e;">
+                            <p id="route-status" class="session-hint" style="display: block; font-weight: 600; color: #166534;">🟢 Ready! Your route will appear automatically after you chat with the AI.</p>
                         </div>
                     </div>
                     
-                    <!-- Route mode selection -->
-                    <div class="route-mode-selector">
-                        <label>Route Type:</label>
-                        <div class="mode-buttons">
-                            <button id="mode-loop" class="mode-btn active" data-mode="circular_loop">
-                                🔄 Loop Walk
-                            </button>
-                            <button id="mode-p2p" class="mode-btn" data-mode="point_to_point">
-                                📍 Point to Point
-                            </button>
-                        </div>
+                    <div class="example-prompts">
+                        <h3>Try saying:</h3>
+                        <ul>
+                            <li>"My session is <span class="session-highlight">session_xxx</span>, I want a 30-minute nature walk"</li>
+                            <li>"Plan a safe evening stroll, my session: <span class="session-highlight">session_xxx</span>"</li>
+                            <li>"Find me a quiet route, session <span class="session-highlight">session_xxx</span>"</li>
+                        </ul>
                     </div>
-                    
-                    <!-- Duration selector (for loop mode) -->
-                    <div class="duration-selector" id="duration-selector">
-                        <label for="duration">Walk Duration: <span id="duration-display">30 min</span></label>
-                        <input type="range" id="duration" min="10" max="120" value="30" step="5">
-                    </div>
-                    
-                    <!-- Generate button -->
-                    <button id="generate-route-btn" class="btn btn-primary btn-large">
-                        ✨ Generate Route
-                    </button>
-                    
-                    <p class="click-hint" id="click-hint">
-                        Click on the map to set your starting point
-                    </p>
                 </div>
 
-                <!-- Chat Panel (watsonx Orchestrate) -->
-                <div class="panel chat-panel">
-                    <h2>💬 Chat with AI</h2>
-                    <p class="panel-description">
-                        Describe your ideal walk in natural language
-                    </p>
-                    
-                    <!-- 
-                    =====================================================
-                    WATSONX ORCHESTRATE EMBEDDED CHAT WIDGET
-                    =====================================================
-                    To get your embed code:
-                    1. Go to watsonx Orchestrate console
-                    2. Navigate to your Agent/Assistant
-                    3. Click "Embed" or "Deploy"
-                    4. Copy the script tag and paste it below
-                    
-                    Example embed code structure:
-                    <script src="https://web-chat.global.assistant.watson.appdomain.cloud/versions/latest/WatsonAssistantChatEntry.js"></script>
-                    <script>
-                      window.watsonAssistantChatOptions = {
-                        integrationID: "YOUR_INTEGRATION_ID",
-                        region: "YOUR_REGION",
-                        serviceInstanceID: "YOUR_SERVICE_INSTANCE_ID",
-                        onLoad: async (instance) => { await instance.render(); }
-                      };
-                    </script>
-                    =====================================================
-                    -->
-                    <div id="orchestrate-chat-container">
-                        <!-- Fallback chat UI when Orchestrate is not configured -->
-                        <div id="fallback-chat" class="fallback-chat">
-                            <div id="chat-messages" class="chat-messages">
-                                <div class="message assistant">
-                                    <p>Hi! I'm your walking route assistant. Tell me about your ideal walk!</p>
-                                    <p class="hint">Try: "I want a 30-minute nature walk with lots of greenery" or "Plan a safe evening stroll"</p>
-                                </div>
-                            </div>
-                            <div class="chat-input-container">
-                                <input type="text" id="chat-input" placeholder="Describe your ideal walk..." />
-                                <button id="chat-send" class="btn btn-primary">Send</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <!-- Chat Panel (Simple Text Input) -->
+                <!-- Chat Panel Removed - Using External Orchestrate -->
             </aside>
         </main>
 
@@ -214,7 +121,8 @@
         <footer class="app-footer">
             <p>
                 Built for <strong>IBM Dev Day "AI Demystified" Hackathon</strong> |
-                Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> (ODbL)
+                Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> (ODbL) |
+                Powered by IBM watsonx Orchestrate
             </p>
         </footer>
     </div>
