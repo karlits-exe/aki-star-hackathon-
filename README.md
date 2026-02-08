@@ -1,4 +1,4 @@
-# Unnamed - Generative Walking Route Planner
+# Generative Walking Route Planner
 
 > Walk by Vibes, Not by Speed
 
